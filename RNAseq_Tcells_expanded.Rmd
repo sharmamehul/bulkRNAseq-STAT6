@@ -1,0 +1,129 @@
+---
+title: "RNAseq_preproces"
+author: "mehul"
+date: "2022-10-17"
+output: html_document
+---
+
+```{load packages}
+library(Rsubread)
+library(package = "edgeR")
+library(pheatmap)
+```
+
+
+```{load BAM files}
+all_files <- list.files('C:/AMA/STAT6/RNAseq/P1 expanded cells RNAseq/T cells/T_cell_BAM_files', pattern='bam')
+x <- featureCounts(files= all_files, annot.ext = "hg38.refGene.gtf", isGTFAnnotationFile = TRUE, isPairedEnd = TRUE, requireBothEndsMapped = TRUE, GTF.attrType="gene_id")
+counts <- x[["counts"]]
+counts <- as.data.frame(counts)
+write.table(counts, "C:/AMA/STAT6/RNAseq/P1 expanded cells RNAseq/T cells/T_cell_analysis/rawcounts.txt")
+
+```
+
+
+```{Start from counts}
+counts <- read.table("C:/AMA/STAT6/RNAseq/P1 expanded cells RNAseq/T cells/T_cell_analysis/rawcounts.txt")
+counts <- as.data.frame(counts)
+counts <- as.matrix(counts[,1:8])
+
+# Normalized counts
+dge  <-  DGEList(counts, remove.zeros =   TRUE)
+dge  <-  calcNormFactors(object = dge, method = "TMM")
+normCounts  <- cpm(dge, normalized.lib.sizes=TRUE)
+
+y <- as.data.frame(normCounts)
+write.table(normCounts, "cpmData.txt")
+
+#load design matrix
+des <- as.data.frame(design_)
+
+filtergenes <- filterByExpr(normCounts, des, min.count = 5, min.prop = 0.7)
+x <- as.data.frame(filtergenes)
+write.table(filtergenes, "filter.txt")
+
+genes <- rownames(y)
+genes <- as.data.frame(genes)
+
+a <- c(genes,x,y)
+a <- as.data.frame(a)
+
+filtered <- subset(a, filtergenes!="FALSE")
+filtered_norm <- as.data.frame(filtered) 
+
+rownames(filtered_norm) <- filtered_norm[,1]
+filtered_norm <- filtered_norm[,-1]
+filtered_norm_final <- filtered_norm[2:9]
+write.table(filtered_norm_final, "filter_refined.txt")
+write.table(filtered_norm_final, "filter_refined.csv")
+
+mat <-  log2(filtered_norm_final + 1)
+
+#PCA calculation
+matpca <- prcomp(t(mat), center=TRUE, scale. = TRUE)
+
+pcaDF <- as.data.frame(matpca$x)
+
+write.csv(pcaDF, "pcamatrix.csv")
+write.csv(summary(matpca)$importance, 'overall_PCA_summary.csv')
+
+```
+
+```{Start from Limma}
+setwd("C:/AMA/STAT6/RNAseq/P1 expanded cells RNAseq/T cells/T_cell_analysis")
+data <- read.table("C:/AMA/STAT6/RNAseq/P1 expanded cells RNAseq/T cells/T_cell_analysis/filter_refined.csv")
+
+meta <- as.data.frame(colnames(data))
+meta$condition <- c("Stim", "Unstim", "Stim", "Unstim", "Stim", "Unstim", "Stim", "Unstim")
+meta$id <- c("HC", "HC", "HC", "HC", "HC", "HC", "P1", "P1")
+rownames(meta) <- meta$`colnames(data)`
+meta <- meta[, c("condition", "id")]
+
+#unstim _ P1 vs HC
+test.met <- meta[meta$condition == "Unstim", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ id, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+hits <- topTable(fit, coef = 2, p.value = 0.3, number = 20000)
+write.csv(hits, "HC_p1_unstim_hits.csv")
+
+#stim _ p1 vs HC
+test.met <- meta[meta$condition == "Stim", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ id, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+hits <- topTable(fit, coef = 2, p.value = 0.2, number = 20000)
+#write.csv(hits, "HC_p1_stim_hits.csv")
+
+#HC _stim vs unstim - use this for making heat maps
+test.met <- meta[meta$id == "HC", ]
+test.dat <- data[, rownames(test.met)]
+design <- model.matrix(~ condition, data = test.met)
+fit <- lmFit(test.dat, design)
+fit <- eBayes(fit)
+hits1 <- topTable(fit, coef = 2, p.value = 1, number = 20000)
+write.csv(hits1, "HC_unstim_vs_stim.csv")
+
+
+
+
+pos_hits <- hits[hits$logFC<0,]
+neg_hits <- hits[hits$logFC>0,]
+all_genes <- genes_of_interest[,1]
+all_genes <- as.data.frame(all_genes)
+rownames(all_genes) <- all_genes[,1]
+all_genes <- rownames(hits1)
+
+meta1 <- meta[c(8,7,6,5,4,3,2,1), ]
+#meta1 <- meta[c(2,4,6,8), ]
+#meta1 <- meta[c(1,3,5,7), ]
+data1 <- data[, rownames(meta1)]
+
+colorPalette <- c("blue", "blue", "white", "red", "red")
+colorPalette <- colorRampPalette(colors = colorPalette)(100)
+pheatmap(data1[all_genes, ], annotation = meta[, -3], scale = "row", cluster_cols = F, fontsize_row = 7, color = colorPalette, border_color = "white")
+
+
+```
